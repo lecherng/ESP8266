@@ -22,6 +22,8 @@ const String httpPost =   "GET /get/latest/dweet/for/lecherngtest HTTP/1.1\r\n"
                           "Accept: */*\r\n"
                           "\r\n";
 
+String last_response = "";
+
 struct dweet_resp{
   char thing[128];
   char created[128];
@@ -123,7 +125,15 @@ void loop() {
   //only process the trimmed responses,
   dweet_resp dweet_resp;
   if (parseDweetRespWith(response_with, &dweet_resp)){
-    printDweetResp(&dweet_resp);
+    String created(dweet_resp.created);
+    if (created != last_response){
+      last_response = created;
+      Serial.println("Get new response from Dweet");
+      printDweetResp(&dweet_resp);
+    }
+    else{
+      Serial.println("No new response from Dweet");
+    }
   }
 
   Serial.println();
