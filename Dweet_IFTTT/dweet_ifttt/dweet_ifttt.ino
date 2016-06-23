@@ -42,23 +42,25 @@ struct dweet_resp{
 };
 
 struct dtime{
-  char date[11];  //add extra 1 char space to avoid overflow.
-  char tm[9];
+  //extra char for null termination
+  char tYear[5];
+  char tMonth[3];
+  char tDay[3];
   char tHour[3];
   char tMin[3];
   char tSec[3];
 };
 
 //systime
-unsigned long bootuptime = 0;
+unsigned long datebootup = 0;
+unsigned long timebootup = 0;
 unsigned long last_response = 0;
+
 
 struct ontime{
   char date[11];
   char tm[12];
 };
-
-dtime dtime;
 
 //gpio setting
 int ledPin = 16; // GPIO13
@@ -139,11 +141,13 @@ void setup() {
       unsigned long epoch = secsSince1900 - seventyYears;
       // print Unix time:
       Serial.println(epoch);
+
   
       // print the hour, minute and second:
+      datebootup = epoch % 1314000L;           // print the date (1314000 is equals one whole year)
+      timebootup = datebootup % 86400L;       // print the hour (86400 equals secs per day)
       Serial.print("The UTC time is ");       // UTC is the time at Greenwich Meridian (GMT)
-      bootuptime = epoch % 86400L;       // print the hour (86400 equals secs per day)
-      Serial.print(bootuptime / 3600);
+      Serial.print(timebootup / 3600);
       Serial.print(':');
       if ( ((epoch % 3600) / 60) < 10 ) {
         // In the first 10 minutes of each hour, we'll want a leading '0'
@@ -217,13 +221,15 @@ void loop() {
 
   //only process the trimmed responses,
   dweet_resp dweet_resp;
+  dtime dtime;
   if (parseDweetRespWith(response_with, &dweet_resp)){
     //String created(dweet_resp.created);
     //if (created != last_response){
-      unsigned long current_response = ((atoi(dtime.tHour) * 3600) +
-                                        (atoi(dtime.tMin) * 60) +
-                                        (atoi(dtime.tSec)));
-    if ((current_response > bootuptime) && (current_response > last_response)){
+    constructtime(&dweet_resp, &dtime);
+    unsigned long current_response = ((atoi(dtime.tHour) * 3600) +
+                                      (atoi(dtime.tMin) * 60) +
+                                      (atoi(dtime.tSec)));
+    if ((current_response > timebootup) && (current_response > last_response)){
       last_response = current_response;
       Serial.println("Get new response from Dweet");
       printDweetResp(&dweet_resp);
@@ -260,16 +266,27 @@ bool parseDweetRespWith(char* content, struct dweet_resp* dweet_resp) {
   strcpy(dweet_resp->thing, root["thing"]);
   strcpy(dweet_resp->created, root["created"]);
   strcpy(dweet_resp->content1, root["content"]["test"]);
-  strncpy( dtime.date, dweet_resp->created, 10);
-  strncpy( dtime.tm, dweet_resp->created+11, 8);
-  strncpy( dtime.tHour, dweet_resp->created+11, 2);
-  strncpy( dtime.tMin, dweet_resp->created+14, 2);
-  strncpy( dtime.tSec, dweet_resp->created+17, 2);
+
   // It's not mandatory to make a copy, you could just use the pointers
   // Since, they are pointing inside the "content" buffer, so you need to make
   // sure it's still in memory when you read the string
 
   return true;
+}
+
+void constructtime(const struct dweet_resp* dweet_resp, struct dtime* dtime) {
+  strncpy( dtime->tYear, dweet_resp->created, 4);
+  dtime->tYear[4] = '\0';
+  strncpy( dtime->tMonth, dweet_resp->created+5, 2);
+  dtime->tMonth[2] = '\0';
+  strncpy( dtime->tDay, dweet_resp->created+8, 2); 
+  dtime->tDay[2] = '\0';
+  strncpy( dtime->tHour, dweet_resp->created+11, 2);
+  dtime->tHour[2] = '\0';
+  strncpy( dtime->tMin, dweet_resp->created+14, 2);
+  dtime->tMin[2] = '\0';
+  strncpy( dtime->tSec, dweet_resp->created+17, 2);
+  dtime->tSec[2] = '\0';
 }
 
 void printDweetResp(const struct dweet_resp* dweet_resp) {

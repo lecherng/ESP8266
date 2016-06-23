@@ -8,7 +8,7 @@ const char* ssid = "openspot";
 const char* password = "1234567890";
 
 //ifttt setting
-const char iftttkey[] = "xxx";
+const char iftttkey[] = "bJrdZ0ZTyGPFGd34vBPx82";
 const char iftttevent[] = "test";
 const char url_server[] = "maker.ifttt.com";
 
@@ -59,7 +59,6 @@ void setup() {
  
 void loop() {
   // Check if a client has connected
-  //WiFiClient client = httpServer.client();
   
   WiFiClient client = server.available();
   if (!client) {
@@ -69,7 +68,6 @@ void loop() {
   // Wait until the client sends some data
   Serial.println("new client");
   while(!client.available()){
-    Serial.println("Here");
     delay(1);
   }
  
