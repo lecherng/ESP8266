@@ -4,6 +4,7 @@
 #include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <WiFiUdp.h>
+#include <TimeLib.h>
 
 //wifi setting
 const char* ssid = "openspot";
@@ -22,7 +23,6 @@ const String httpPost =   "GET /get/latest/dweet/for/lecherngtest HTTP/1.1\r\n"
                           "User-Agent: Arduino/1.0\r\n"
                           "Accept: */*\r\n"
                           "\r\n";
-const unsigned long HTTP_TIMEOUT = 10000;  // max respone time from server
 
 
 //ntp setting
@@ -41,7 +41,8 @@ struct dweet_resp{
   char content1[64];
 };
 
-struct dtime{
+//general struct for time
+struct time_struct{
   //extra char for null termination
   char tYear[5];
   char tMonth[3];
@@ -52,15 +53,9 @@ struct dtime{
 };
 
 //systime
-unsigned long datebootup = 0;
-unsigned long timebootup = 0;
-unsigned long last_response = 0;
-
-
-struct ontime{
-  char date[11];
-  char tm[12];
-};
+time_struct bootTime;
+time_struct prevResponse;
+time_t prevDisplay = 0; // when the digital clock was displayed
 
 //gpio setting
 int ledPin = 16; // GPIO13
@@ -81,7 +76,6 @@ void setup() {
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
- 
   WiFi.begin(ssid, password);
  
   while (WiFi.status() != WL_CONNECTED) {
@@ -101,73 +95,31 @@ void setup() {
   Serial.print(WiFi.localIP());
   Serial.println("/");
 
+  //Getting time from NTP server.
   Serial.println("Starting UDP");
   udp.begin(localPort);
   Serial.print("Local port: ");
   Serial.println(udp.localPort());
+  setSyncProvider(getNtpTime);
 
-  WiFi.hostByName(ntpServerName, timeServerIP);
-  sendNTPpacket(timeServerIP);
-  delay(1000);
-  while(true){
-    int cb = udp.parsePacket();
-    if (!cb){
-      Serial.println("no packet yet");
-      delay(1000);
+  //set boottime
+  SetBootTime();
+}
+void loop() {
+
+  //this function run every 5s
+  delay(5000);
+  Serial.println("======================================");
+  
+  //show the current time...
+  //can be disable in future...
+  if (timeStatus() != timeNotSet) {
+    if (now() != prevDisplay) { //update the display only if time has changed
+      prevDisplay = now();
+      digitalClockDisplay();  
     }
-    else{
-      //https://github.com/esp8266/Arduino/blob/master/libraries/ESP8266WiFi/examples/NTPClient/NTPClient.ino
-      
-      Serial.println("packet received, length= ");
-      Serial.println(cb);
-      udp.read(packetBuffer, NTP_PACKET_SIZE);
-  
-      //the timestamp starts at byte 40 of the received packet and is four bytes,
-      // or two words, long. First, esxtract the two words:
-      
-      unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
-      unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
-      // combine the four bytes (two words) into a long integer
-      // this is NTP time (seconds since Jan 1 1900):
-      unsigned long secsSince1900 = highWord << 16 | lowWord;
-      Serial.print("Seconds since Jan 1 1900 = " );
-      Serial.println(secsSince1900);
-  
-      // now convert NTP time into everyday time:
-      Serial.print("Unix time = ");
-      // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
-      const unsigned long seventyYears = 2208988800UL;
-      // subtract seventy years:
-      unsigned long epoch = secsSince1900 - seventyYears;
-      // print Unix time:
-      Serial.println(epoch);
-
-  
-      // print the hour, minute and second:
-      datebootup = epoch % 1314000L;           // print the date (1314000 is equals one whole year)
-      timebootup = datebootup % 86400L;       // print the hour (86400 equals secs per day)
-      Serial.print("The UTC time is ");       // UTC is the time at Greenwich Meridian (GMT)
-      Serial.print(timebootup / 3600);
-      Serial.print(':');
-      if ( ((epoch % 3600) / 60) < 10 ) {
-        // In the first 10 minutes of each hour, we'll want a leading '0'
-        Serial.print('0');
-      }
-      Serial.print((epoch  % 3600) / 60); // print the minute (3600 equals secs per minute)
-      Serial.print(':');
-      if ( (epoch % 60) < 10 ) {
-        // In the first 10 seconds of each minute, we'll want a leading '0'
-        Serial.print('0');
-      }
-      Serial.println(epoch % 60); // print the second
-      break;
-    } 
   }
 
-}
- 
-void loop() {
-  delay(10000);
   digitalWrite(ledPin, HIGH);
   
   Serial.print("connecting to ");
@@ -175,23 +127,25 @@ void loop() {
 
   WiFiClient client;
   if (!client.connect(dweet_server, 80)){
-    Serial.println("connection failed");
+    Serial.println("connection failed\n\n");
     return;
   }
 
+
+  //get Dweet Response
   client.print(httpPost);
   
   char endOfHeaders[] = "\r\n\r\n";
-
   client.setTimeout(HTTP_TIMEOUT);
   bool ok = client.find(endOfHeaders);
   
   if (!ok) {
-    Serial.println("No response or invalid response!");
+    Serial.println("No response or invalid response!\n\n");
+    return;
   }
   
   delay(10);
-  
+
   char response[MAX_CONTENT_SIZE];
   size_t length = client.readBytes(response, sizeof(response));
   response[length] = 0;
@@ -221,16 +175,13 @@ void loop() {
 
   //only process the trimmed responses,
   dweet_resp dweet_resp;
-  dtime dtime;
+  time_struct dtime;
   if (parseDweetRespWith(response_with, &dweet_resp)){
     //String created(dweet_resp.created);
     //if (created != last_response){
     constructtime(&dweet_resp, &dtime);
-    unsigned long current_response = ((atoi(dtime.tHour) * 3600) +
-                                      (atoi(dtime.tMin) * 60) +
-                                      (atoi(dtime.tSec)));
-    if ((current_response > timebootup) && (current_response > last_response)){
-      last_response = current_response;
+    if (IsNewerDweetResponse(&dtime, &prevResponse)){
+      prevResponse = dtime;
       Serial.println("Get new response from Dweet");
       printDweetResp(&dweet_resp);
       Serial.println("HIGH LED");
@@ -240,10 +191,14 @@ void loop() {
       Serial.println("No new response from Dweet");
     }
   }
-
-  Serial.println();
-  Serial.println("closing connection");
+  Serial.println("closing connection\n\n");
 }
+
+void digitalClockDisplay(){
+  // digital clock display of the time
+  Serial.printf("%02d:%02d.%02d %02d-%02d-%04d\n", hour(), minute(), second(), day(), month(), year());
+}
+
 
 bool parseDweetRespWith(char* content, struct dweet_resp* dweet_resp) {
   // Compute optimal size of the JSON buffer according to what we need to parse.
@@ -274,7 +229,7 @@ bool parseDweetRespWith(char* content, struct dweet_resp* dweet_resp) {
   return true;
 }
 
-void constructtime(const struct dweet_resp* dweet_resp, struct dtime* dtime) {
+void constructtime(const struct dweet_resp* dweet_resp, struct time_struct* dtime) {
   strncpy( dtime->tYear, dweet_resp->created, 4);
   dtime->tYear[4] = '\0';
   strncpy( dtime->tMonth, dweet_resp->created+5, 2);
@@ -296,8 +251,47 @@ void printDweetResp(const struct dweet_resp* dweet_resp) {
   Serial.println(dweet_resp->created);
   Serial.print("content1 = ");
   Serial.println(dweet_resp->content1);
-
 }
+
+time_t getNtpTime()
+{
+  WiFi.hostByName(ntpServerName, timeServerIP);
+  delay(1000);
+  while(true){
+    sendNTPpacket(timeServerIP);
+    int cb = udp.parsePacket();
+    if (!cb){
+      Serial.println("no packet yet");
+      delay(1000);
+    }
+    else{
+      //https://github.com/esp8266/Arduino/blob/master/libraries/ESP8266WiFi/examples/NTPClient/NTPClient.ino
+      //https://github.com/PaulStoffregen/Time/blob/master/examples/TimeNTP/TimeNTP.ino
+      
+      Serial.println(cb);
+      udp.read(packetBuffer, NTP_PACKET_SIZE);
+  
+      //the timestamp starts at byte 40 of the received packet and is four bytes,
+      // or two words, long. First, esxtract the two words:
+      
+      unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+      unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+      // combine the four bytes (two words) into a long integer
+      // this is NTP time (seconds since Jan 1 1900):
+      unsigned long secsSince1900 = highWord << 16 | lowWord;
+  
+      // now convert NTP time into everyday time:
+      // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
+      const unsigned long seventyYears = 2208988800UL;
+      // subtract seventy years:
+      unsigned long epoch = secsSince1900 - seventyYears;
+      // print Unix time:
+      Serial.println(epoch);
+      return epoch;
+    } //if
+  }  //while
+  
+} //gettimeNtp
 
 // send an NTP request to the time server at the given address
 unsigned long sendNTPpacket(IPAddress& address)
@@ -323,3 +317,40 @@ unsigned long sendNTPpacket(IPAddress& address)
   udp.write(packetBuffer, NTP_PACKET_SIZE);
   udp.endPacket();
 }
+
+void SetBootTime(){
+  sprintf(bootTime.tYear,  "%02d", year());
+  sprintf(bootTime.tMonth, "%02d", month());
+  sprintf(bootTime.tDay,   "%02d", day());
+  sprintf(bootTime.tHour,  "%02d", hour());
+  sprintf(bootTime.tMin,   "%02d", minute());
+  sprintf(bootTime.tSec,   "%02d", second());
+  prevResponse = bootTime;
+}
+
+void printFromTimeStruct(struct time_struct* time_struct){
+  Serial.printf("%02d:%02d.%02d %02d-%02d-%04d\n", atoi(time_struct->tHour), atoi(time_struct->tMin), atoi(time_struct->tSec),
+                                                 atoi(time_struct->tDay), atoi(time_struct->tMonth), atoi(time_struct->tYear));
+}
+
+boolean IsNewerDweetResponse(struct time_struct* dweet_time, struct time_struct* time_to_compare){
+  if (atoi(dweet_time->tYear) > atoi(time_to_compare->tYear))
+      return true;
+  if (atoi(dweet_time->tMonth) > atoi(time_to_compare->tMonth))
+      return true;
+  if (atoi(dweet_time->tDay) > atoi(time_to_compare->tDay))
+      return true;
+  if (atoi(dweet_time->tHour) > atoi(time_to_compare->tHour))
+      return true;      
+  if (atoi(dweet_time->tHour) == atoi(time_to_compare->tHour)){
+      if (atoi(dweet_time->tMin) > atoi(time_to_compare->tMin))
+          return true;
+      if (atoi(dweet_time->tMin) == atoi(time_to_compare->tMin)){
+          if (atoi(dweet_time->tSec) > atoi(time_to_compare->tSec))
+              return true;
+      }
+  }
+  return false;
+}
+
+
